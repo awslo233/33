@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+
+# next.js
+.next/
+out/
+
+# capacitor
+android/
+ios/
+
+# build
+www/
+dist/
+
+# env
+.env*.local
+
+# misc
+*.keystore
+!debug.keystore
+.DS_Store
+*.pem
