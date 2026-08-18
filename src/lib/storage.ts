@@ -15,7 +15,7 @@ export function getEntries(): JournalEntry[] {
   }
 }
 
-export function saveEntry(entry: JournalEntry): void {
+export function saveEntry(entry: JournalEntry): { ok: boolean; error?: 'quota' | 'unknown' } {
   const entries = getEntries();
   const idx = entries.findIndex((e) => e.id === entry.id);
   if (idx >= 0) {
@@ -23,7 +23,16 @@ export function saveEntry(entry: JournalEntry): void {
   } else {
     entries.unshift(entry);
   }
-  localStorage.setItem(JOURNAL_KEY, JSON.stringify(entries));
+  try {
+    localStorage.setItem(JOURNAL_KEY, JSON.stringify(entries));
+    return { ok: true };
+  } catch (e) {
+    // 存储满时抛 QuotaExceededError
+    if (e instanceof DOMException && (e.name === 'QuotaExceededError' || e.code === 22)) {
+      return { ok: false, error: 'quota' };
+    }
+    return { ok: false, error: 'unknown' };
+  }
 }
 
 export function deleteEntry(id: string): void {
