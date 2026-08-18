@@ -38,25 +38,45 @@ import {
   type ExportData,
 } from '@/lib/storage';
 import type { JournalEntry, MoodType, ViewMode } from '@/lib/types';
+import { Capacitor } from '@capacitor/core';
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
 
 // --- Capacitor detection ---
 function isCapacitor(): boolean {
   if (typeof window === 'undefined') return false;
-  return !!(window as unknown as { Capacitor?: unknown }).Capacitor;
+  return Capacitor.isNativePlatform();
 }
 
 async function capacitorSaveFile(filename: string, content: string): Promise<boolean> {
   if (!isCapacitor()) return false;
-  const FS = (window as unknown as { Capacitor?: { Plugins?: { Filesystem?: any } } }).Capacitor?.Plugins?.Filesystem;
-  if (!FS) return false;
   try {
     const base64 = btoa(unescape(encodeURIComponent(content)));
-    await FS.writeFile({
-      path: 'Download/' + filename,
+    // 写入 Cache 目录（无需任何权限）
+    await Filesystem.writeFile({
+      path: filename,
       data: base64,
-      directory: FS.Directory.ExternalStorage,
-      encoding: FS.Encoding.UTF8,
+      directory: Directory.Cache,
+      encoding: Encoding.UTF8,
+      recursive: true,
     });
+    const uriRes = await Filesystem.getUri({ directory: Directory.Cache, path: filename });
+
+    // 用系统分享面板（用户可选"保存到文件"、"发送到微信"等）
+    try {
+      await Share.share({
+        title: filename,
+        text: filename,
+        url: uriRes.uri,
+        dialogTitle: '保存或分享到...',
+      });
+    } catch (e) {
+      // 用户取消分享不算失败
+      const msg = e && typeof e === 'object' && 'message' in e ? String((e as Error).message) : '';
+      if (!/cancel/i.test(msg)) {
+        console.warn('Share failed:', e);
+      }
+    }
     return true;
   } catch (e) {
     console.warn('Capacitor save failed:', e);
@@ -66,19 +86,17 @@ async function capacitorSaveFile(filename: string, content: string): Promise<boo
 
 async function capacitorShareFile(filename: string, content: string, title: string): Promise<boolean> {
   if (!isCapacitor()) return false;
-  const FS = (window as unknown as { Capacitor?: { Plugins?: { Filesystem?: any; Share?: any } } }).Capacitor?.Plugins?.Filesystem;
-  const SH = (window as unknown as { Capacitor?: { Plugins?: { Filesystem?: any; Share?: any } } }).Capacitor?.Plugins?.Share;
-  if (!FS || !SH) return false;
   try {
     const base64 = btoa(unescape(encodeURIComponent(content)));
-    await FS.writeFile({
+    await Filesystem.writeFile({
       path: filename,
       data: base64,
-      directory: FS.Directory.Cache,
-      encoding: FS.Encoding.UTF8,
+      directory: Directory.Cache,
+      encoding: Encoding.UTF8,
+      recursive: true,
     });
-    const uriRes = await FS.getUri({ directory: FS.Directory.Cache, path: filename });
-    await SH.share({
+    const uriRes = await Filesystem.getUri({ directory: Directory.Cache, path: filename });
+    await Share.share({
       title,
       text: title,
       url: uriRes.uri,
@@ -354,7 +372,11 @@ export default function Home() {
           createdAt,
           updatedAt: nowISO,
         };
-        saveEntry(updated);
+        const result = saveEntry(updated);
+        if (!result.ok) {
+          setShareMsg(result.error === 'quota' ? '存储空间已满，请先导出备份并删除旧日记' : '保存失败，请重试');
+          return;
+        }
         setEditingEntry(null);
       } else {
         const entry: JournalEntry = {
@@ -364,7 +386,11 @@ export default function Home() {
           createdAt: nowISO,
           updatedAt: nowISO,
         };
-        saveEntry(entry);
+        const result = saveEntry(entry);
+        if (!result.ok) {
+          setShareMsg(result.error === 'quota' ? '存储空间已满，请先导出备份并删除旧日记' : '保存失败，请重试');
+          return;
+        }
       }
 
       setDayEntries(getEntriesByDate(selectedDate));
@@ -403,7 +429,7 @@ export default function Home() {
 
     // Try Capacitor first
     if (await capacitorSaveFile(filename, json)) {
-      setShareMsg('已保存到下载文件夹');
+      setShareMsg('已通过分享面板导出，请选择"保存到文件"或发送到其他 App');
       return;
     }
 
@@ -415,6 +441,7 @@ export default function Home() {
     a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
+    setShareMsg('已下载到浏览器下载文件夹');
   }, []);
 
   const doExportMarkdown = useCallback(async () => {
@@ -423,7 +450,7 @@ export default function Home() {
 
     // Try Capacitor first
     if (await capacitorSaveFile(filename, md)) {
-      setShareMsg('已保存到下载文件夹');
+      setShareMsg('已通过分享面板导出，请选择"保存到文件"或发送到其他 App');
       return;
     }
 
@@ -435,6 +462,7 @@ export default function Home() {
     a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
+    setShareMsg('已下载到浏览器下载文件夹');
   }, []);
 
   const doShare = useCallback(async () => {
@@ -510,6 +538,8 @@ export default function Home() {
   const withPWACheck = useCallback(
     (action: 'export' | 'exportMd' | 'share' | 'import', callback: () => void) => {
       return () => {
+        // 关闭设置面板，避免弹窗被遮挡
+        setShowSettings(false);
         if (isCapacitor()) {
           // In Capacitor, just run the callback directly
           callback();
@@ -1122,10 +1152,13 @@ export default function Home() {
                       style={{ width: `${Math.min(storageUsage.percentage, 100)}%` }}
                     />
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    可存约 {Math.max(0, Math.floor((storageUsage.total - storageUsage.used) / 350))} 篇日记（每篇平均约 350 字节）
+                  </p>
                   {storageUsage.percentage > 80 && (
                     <p className="text-xs text-red-500 flex items-center gap-1">
                       <ChevronDown className="size-3" />
-                      存储空间即将用尽，建议导出数据备份
+                      存储空间即将用尽，建议导出备份并清理旧日记
                     </p>
                   )}
                 </div>
