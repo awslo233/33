@@ -48,11 +48,38 @@ function isCapacitor(): boolean {
   return Capacitor.isNativePlatform();
 }
 
-async function capacitorSaveFile(filename: string, content: string): Promise<boolean> {
-  if (!isCapacitor()) return false;
+async function capacitorSaveFile(filename: string, content: string): Promise<{ ok: boolean; path?: string; viaShare?: boolean }> {
+  if (!isCapacitor()) return { ok: false };
   try {
     const base64 = btoa(unescape(encodeURIComponent(content)));
-    // 写入 Cache 目录（无需任何权限）
+
+    // 尝试请求存储权限（Android 10 及以下需要，11+ scoped storage 下不弹窗）
+    try {
+      const perm = await Filesystem.requestPermissions();
+      if (perm.granted) {
+        // 有权限时尝试直接写到 Download 文件夹（Android 10- 成功；11+ 会落到 App 私有目录）
+        try {
+          await Filesystem.writeFile({
+            path: `Download/${filename}`,
+            data: base64,
+            directory: Directory.ExternalStorage,
+            encoding: Encoding.UTF8,
+            recursive: true,
+          });
+          const uriRes = await Filesystem.getUri({
+            directory: Directory.ExternalStorage,
+            path: `Download/${filename}`,
+          });
+          return { ok: true, path: uriRes.uri, viaShare: false };
+        } catch (e) {
+          console.warn('ExternalStorage write failed, falling back to Cache+Share:', e);
+        }
+      }
+    } catch (e) {
+      console.warn('Permission request failed:', e);
+    }
+
+    // Fallback: 写入 Cache（无需权限）+ 系统分享面板
     await Filesystem.writeFile({
       path: filename,
       data: base64,
@@ -61,8 +88,6 @@ async function capacitorSaveFile(filename: string, content: string): Promise<boo
       recursive: true,
     });
     const uriRes = await Filesystem.getUri({ directory: Directory.Cache, path: filename });
-
-    // 用系统分享面板（用户可选"保存到文件"、"发送到微信"等）
     try {
       await Share.share({
         title: filename,
@@ -71,16 +96,15 @@ async function capacitorSaveFile(filename: string, content: string): Promise<boo
         dialogTitle: '保存或分享到...',
       });
     } catch (e) {
-      // 用户取消分享不算失败
       const msg = e && typeof e === 'object' && 'message' in e ? String((e as Error).message) : '';
       if (!/cancel/i.test(msg)) {
         console.warn('Share failed:', e);
       }
     }
-    return true;
+    return { ok: true, path: uriRes.uri, viaShare: true };
   } catch (e) {
     console.warn('Capacitor save failed:', e);
-    return false;
+    return { ok: false };
   }
 }
 
@@ -189,6 +213,16 @@ export default function Home() {
   const [editingEntry, setEditingEntry] = useState<JournalEntry | null>(null);
   const [mobilePanel, setMobilePanel] = useState<'calendar' | 'list'>('list');
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsClosing, setSettingsClosing] = useState(false);
+
+  // 关闭设置浮窗（带滑出动画）
+  const closeSettings = useCallback(() => {
+    setSettingsClosing(true);
+    setTimeout(() => {
+      setShowSettings(false);
+      setSettingsClosing(false);
+    }, 260); // 与 sheetDown 动画时长一致
+  }, []);
   const [showPWAPrompt, setShowPWAPrompt] = useState(false);
   const [pwaAction, setPwaAction] = useState<'export' | 'exportMd' | 'share' | 'import'>('export');
   const [importMsg, setImportMsg] = useState<string | null>(null);
@@ -428,8 +462,13 @@ export default function Home() {
     const filename = `心流日记-备份-${formatDate(new Date())}.json`;
 
     // Try Capacitor first
-    if (await capacitorSaveFile(filename, json)) {
-      setShareMsg('已通过分享面板导出，请选择"保存到文件"或发送到其他 App');
+    const result = await capacitorSaveFile(filename, json);
+    if (result.ok) {
+      if (result.viaShare) {
+        setShareMsg('已通过分享面板导出，请选择"保存到文件"或发送到其他 App');
+      } else {
+        setShareMsg(`已保存到下载文件夹：Download/${filename}`);
+      }
       return;
     }
 
@@ -449,8 +488,13 @@ export default function Home() {
     const filename = `心流日记-${formatDate(new Date())}.md`;
 
     // Try Capacitor first
-    if (await capacitorSaveFile(filename, md)) {
-      setShareMsg('已通过分享面板导出，请选择"保存到文件"或发送到其他 App');
+    const result = await capacitorSaveFile(filename, md);
+    if (result.ok) {
+      if (result.viaShare) {
+        setShareMsg('已通过分享面板导出，请选择"保存到文件"或发送到其他 App');
+      } else {
+        setShareMsg(`已保存到下载文件夹：Download/${filename}`);
+      }
       return;
     }
 
@@ -538,8 +582,8 @@ export default function Home() {
   const withPWACheck = useCallback(
     (action: 'export' | 'exportMd' | 'share' | 'import', callback: () => void) => {
       return () => {
-        // 关闭设置面板，避免弹窗被遮挡
-        setShowSettings(false);
+        // 关闭设置面板（带动画），避免弹窗被遮挡
+        closeSettings();
         if (isCapacitor()) {
           // In Capacitor, just run the callback directly
           callback();
@@ -976,18 +1020,18 @@ export default function Home() {
 
       {/* Settings panel */}
       {showSettings && (
-        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 fade-enter">
+        <div className={`fixed inset-0 z-[1000] flex items-center justify-center p-4 ${settingsClosing ? 'backdrop-fade-out' : 'backdrop-fade-in'}`}>
           <div
             className="absolute inset-0 bg-black/20 backdrop-blur-sm"
-            onClick={() => setShowSettings(false)}
+            onClick={closeSettings}
           />
-          <div className="relative bg-card rounded-2xl border border-border w-full max-w-sm shadow-xl flex flex-col max-h-[66vh]">
+          <div className={`relative bg-card rounded-2xl border border-border w-full max-w-sm shadow-xl flex flex-col max-h-[66vh] ${settingsClosing ? 'sheet-slide-down' : 'sheet-slide-up'}`}>
             <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
               <h2 className="text-base font-medium">设置</h2>
               <Button
                 variant="ghost"
                 size="icon-sm"
-                onClick={() => setShowSettings(false)}
+                onClick={closeSettings}
                 className="rounded-lg"
               >
                 <X className="size-4" />
@@ -1214,8 +1258,39 @@ export default function Home() {
           </div>
 
           <div className="overflow-hidden rounded-2xl border border-border bg-card">
+            <div key={view} className="view-fade-enter">
+              {view === 'write' && (
+                <div className="h-full overflow-y-auto p-5 custom-scrollbar">
+                  <JournalEditor
+                    onSave={handleSave}
+                    initialContent={editingEntry?.content}
+                    initialMood={editingEntry?.mood}
+                    initialDate={editingEntry?.createdAt ? formatDate(new Date(editingEntry.createdAt)) : undefined}
+                    editingId={editingEntry?.id}
+                    onCancelEdit={handleCancelEdit}
+                  />
+                </div>
+              )}
+              {view === 'history' && (
+                <div className="h-full flex flex-col">
+                  <div className="p-3 border-b border-border">
+                    <CalendarView selectedDate={selectedDate} onSelectDate={handleDateSelect} />
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                    <JournalList entries={dayEntries} onEdit={handleEdit} onDelete={handleDelete} />
+                  </div>
+                </div>
+              )}
+              {view === 'search' && <JournalSearch />}
+            </div>
+          </div>
+        </div>
+
+        {/* Mobile layout */}
+        <div className="md:hidden flex flex-col h-[calc(100vh-10rem)]">
+          <div key={view} className="view-fade-enter flex-1 flex flex-col overflow-hidden">
             {view === 'write' && (
-              <div className="h-full overflow-y-auto p-5 custom-scrollbar">
+              <div className="flex-1 overflow-y-auto rounded-2xl border border-border bg-card p-4 custom-scrollbar">
                 <JournalEditor
                   onSave={handleSave}
                   initialContent={editingEntry?.content}
@@ -1226,75 +1301,48 @@ export default function Home() {
                 />
               </div>
             )}
+
             {view === 'history' && (
-              <div className="h-full flex flex-col">
-                <div className="p-3 border-b border-border">
-                  <CalendarView selectedDate={selectedDate} onSelectDate={handleDateSelect} />
+              <div className="flex-1 flex flex-col overflow-hidden">
+                <div className="flex gap-1 mb-3">
+                  <Button
+                    variant={mobilePanel === 'calendar' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    onClick={() => setMobilePanel('calendar')}
+                    className="rounded-xl flex-1"
+                  >
+                    <CalendarDays className="size-3.5 mr-1" />
+                    日历
+                  </Button>
+                  <Button
+                    variant={mobilePanel === 'list' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    onClick={() => setMobilePanel('list')}
+                    className="rounded-xl flex-1"
+                  >
+                    <BookOpen className="size-3.5 mr-1" />
+                    日记 ({dayEntries.length})
+                  </Button>
                 </div>
-                <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-                  <JournalList entries={dayEntries} onEdit={handleEdit} onDelete={handleDelete} />
+
+                <div className="flex-1 overflow-y-auto custom-scrollbar">
+                  {mobilePanel === 'calendar' ? (
+                    <div className="rounded-2xl border border-border bg-card">
+                      <CalendarView selectedDate={selectedDate} onSelectDate={handleDateSelect} />
+                    </div>
+                  ) : (
+                    <JournalList entries={dayEntries} onEdit={handleEdit} onDelete={handleDelete} />
+                  )}
                 </div>
               </div>
             )}
-            {view === 'search' && <JournalSearch />}
+
+            {view === 'search' && (
+              <div className="flex-1 rounded-2xl border border-border bg-card overflow-hidden">
+                <JournalSearch />
+              </div>
+            )}
           </div>
-        </div>
-
-        {/* Mobile layout */}
-        <div className="md:hidden flex flex-col h-[calc(100vh-10rem)]">
-          {view === 'write' && (
-            <div className="flex-1 overflow-y-auto rounded-2xl border border-border bg-card p-4 custom-scrollbar">
-              <JournalEditor
-                onSave={handleSave}
-                initialContent={editingEntry?.content}
-                initialMood={editingEntry?.mood}
-                initialDate={editingEntry?.createdAt ? formatDate(new Date(editingEntry.createdAt)) : undefined}
-                editingId={editingEntry?.id}
-                onCancelEdit={handleCancelEdit}
-              />
-            </div>
-          )}
-
-          {view === 'history' && (
-            <div className="flex-1 flex flex-col overflow-hidden">
-              <div className="flex gap-1 mb-3">
-                <Button
-                  variant={mobilePanel === 'calendar' ? 'secondary' : 'ghost'}
-                  size="sm"
-                  onClick={() => setMobilePanel('calendar')}
-                  className="rounded-xl flex-1"
-                >
-                  <CalendarDays className="size-3.5 mr-1" />
-                  日历
-                </Button>
-                <Button
-                  variant={mobilePanel === 'list' ? 'secondary' : 'ghost'}
-                  size="sm"
-                  onClick={() => setMobilePanel('list')}
-                  className="rounded-xl flex-1"
-                >
-                  <BookOpen className="size-3.5 mr-1" />
-                  日记 ({dayEntries.length})
-                </Button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto custom-scrollbar">
-                {mobilePanel === 'calendar' ? (
-                  <div className="rounded-2xl border border-border bg-card">
-                    <CalendarView selectedDate={selectedDate} onSelectDate={handleDateSelect} />
-                  </div>
-                ) : (
-                  <JournalList entries={dayEntries} onEdit={handleEdit} onDelete={handleDelete} />
-                )}
-              </div>
-            </div>
-          )}
-
-          {view === 'search' && (
-            <div className="flex-1 rounded-2xl border border-border bg-card overflow-hidden">
-              <JournalSearch />
-            </div>
-          )}
         </div>
       </main>
 
