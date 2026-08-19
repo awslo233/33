@@ -205,6 +205,58 @@ body {
   to { opacity: 1; }
 }
 
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+/* 主屏幕三功能面板渐入渐出 */
+.view-fade-enter {
+  animation: viewFadeIn 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.view-fade-exit {
+  animation: viewFadeOut 0.18s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+@keyframes viewFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes viewFadeOut {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-4px); }
+}
+
+/* 设置浮窗向上滑入 / 向下滑出 */
+.sheet-slide-up {
+  animation: sheetUp 0.34s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.sheet-slide-down {
+  animation: sheetDown 0.26s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+@keyframes sheetUp {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+
+@keyframes sheetDown {
+  from { transform: translateY(0); }
+  to   { transform: translateY(100%); }
+}
+
+/* 遮罩渐入渐出 */
+.backdrop-fade-in {
+  animation: fadeIn 0.26s ease-out;
+}
+
+.backdrop-fade-out {
+  animation: fadeOut 0.2s ease-out forwards;
+}
+
 .theme-transition,
 .theme-transition *,
 .theme-transition *::before,
