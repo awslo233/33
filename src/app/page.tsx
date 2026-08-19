@@ -53,11 +53,24 @@ async function capacitorSaveFile(filename: string, content: string): Promise<{ o
   try {
     const base64 = btoa(unescape(encodeURIComponent(content)));
 
-    // 尝试请求存储权限（Android 10 及以下需要，11+ scoped storage 下不弹窗）
+    // 方案1: 使用 saveFile (Capacitor Filesystem v5+)，Android 11+ 会弹出系统保存对话框
+    try {
+      const mimeType = filename.endsWith('.json') ? 'application/json' : 'text/markdown';
+      const result = await Filesystem.saveFile({
+        path: filename,
+        data: base64,
+        mimeType,
+        description: `Mindflow Diary - ${filename}`,
+      });
+      return { ok: true, path: result.uri, viaShare: false };
+    } catch (e) {
+      console.warn('saveFile not available, trying ExternalStorage:', e);
+    }
+
+    // 方案2: 直接写入 ExternalStorage（Android 10 及以下有效）
     try {
       const perm = await Filesystem.requestPermissions();
       if (perm.granted) {
-        // 有权限时尝试直接写到 Download 文件夹（Android 10- 成功；11+ 会落到 App 私有目录）
         try {
           await Filesystem.writeFile({
             path: `Download/${filename}`,
@@ -72,14 +85,14 @@ async function capacitorSaveFile(filename: string, content: string): Promise<{ o
           });
           return { ok: true, path: uriRes.uri, viaShare: false };
         } catch (e) {
-          console.warn('ExternalStorage write failed, falling back to Cache+Share:', e);
+          console.warn('ExternalStorage write failed:', e);
         }
       }
     } catch (e) {
       console.warn('Permission request failed:', e);
     }
 
-    // Fallback: 写入 Cache（无需权限）+ 系统分享面板
+    // 方案3: 写入 Cache + 系统分享面板
     await Filesystem.writeFile({
       path: filename,
       data: base64,
@@ -1257,40 +1270,9 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="overflow-hidden rounded-2xl border border-border bg-card">
-            <div key={view} className="view-fade-enter">
-              {view === 'write' && (
-                <div className="h-full overflow-y-auto p-5 custom-scrollbar">
-                  <JournalEditor
-                    onSave={handleSave}
-                    initialContent={editingEntry?.content}
-                    initialMood={editingEntry?.mood}
-                    initialDate={editingEntry?.createdAt ? formatDate(new Date(editingEntry.createdAt)) : undefined}
-                    editingId={editingEntry?.id}
-                    onCancelEdit={handleCancelEdit}
-                  />
-                </div>
-              )}
-              {view === 'history' && (
-                <div className="h-full flex flex-col">
-                  <div className="p-3 border-b border-border">
-                    <CalendarView selectedDate={selectedDate} onSelectDate={handleDateSelect} />
-                  </div>
-                  <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-                    <JournalList entries={dayEntries} onEdit={handleEdit} onDelete={handleDelete} />
-                  </div>
-                </div>
-              )}
-              {view === 'search' && <JournalSearch />}
-            </div>
-          </div>
-        </div>
-
-        {/* Mobile layout */}
-        <div className="md:hidden flex flex-col h-[calc(100vh-10rem)]">
-          <div key={view} className="view-fade-enter flex-1 flex flex-col overflow-hidden">
-            {view === 'write' && (
-              <div className="flex-1 overflow-y-auto rounded-2xl border border-border bg-card p-4 custom-scrollbar">
+          <div className="relative overflow-hidden rounded-2xl border border-border bg-card min-h-[400px]">
+            <div className={`absolute inset-0 transition-opacity duration-300 ${view === 'write' ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
+              <div className="h-full overflow-y-auto p-5 custom-scrollbar">
                 <JournalEditor
                   onSave={handleSave}
                   initialContent={editingEntry?.content}
@@ -1300,10 +1282,41 @@ export default function Home() {
                   onCancelEdit={handleCancelEdit}
                 />
               </div>
-            )}
+            </div>
+            <div className={`absolute inset-0 transition-opacity duration-300 ${view === 'history' ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
+              <div className="h-full flex flex-col">
+                <div className="p-3 border-b border-border">
+                  <CalendarView selectedDate={selectedDate} onSelectDate={handleDateSelect} />
+                </div>
+                <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                  <JournalList entries={dayEntries} onEdit={handleEdit} onDelete={handleDelete} />
+                </div>
+              </div>
+            </div>
+            <div className={`absolute inset-0 transition-opacity duration-300 ${view === 'search' ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
+              <JournalSearch />
+            </div>
+          </div>
+        </div>
 
-            {view === 'history' && (
-              <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Mobile layout */}
+        <div className="md:hidden flex flex-col h-[calc(100vh-10rem)]">
+          <div className="relative flex-1 overflow-hidden">
+            <div className={`absolute inset-0 transition-opacity duration-300 ${view === 'write' ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
+              <div className="h-full overflow-y-auto rounded-2xl border border-border bg-card p-4 custom-scrollbar">
+                <JournalEditor
+                  onSave={handleSave}
+                  initialContent={editingEntry?.content}
+                  initialMood={editingEntry?.mood}
+                  initialDate={editingEntry?.createdAt ? formatDate(new Date(editingEntry.createdAt)) : undefined}
+                  editingId={editingEntry?.id}
+                  onCancelEdit={handleCancelEdit}
+                />
+              </div>
+            </div>
+
+            <div className={`absolute inset-0 transition-opacity duration-300 ${view === 'history' ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
+              <div className="h-full flex flex-col overflow-hidden">
                 <div className="flex gap-1 mb-3">
                   <Button
                     variant={mobilePanel === 'calendar' ? 'secondary' : 'ghost'}
@@ -1335,13 +1348,13 @@ export default function Home() {
                   )}
                 </div>
               </div>
-            )}
+            </div>
 
-            {view === 'search' && (
-              <div className="flex-1 rounded-2xl border border-border bg-card overflow-hidden">
+            <div className={`absolute inset-0 transition-opacity duration-300 ${view === 'search' ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
+              <div className="h-full rounded-2xl border border-border bg-card overflow-hidden">
                 <JournalSearch />
               </div>
-            )}
+            </div>
           </div>
         </div>
       </main>
