@@ -39,11 +39,24 @@ jobs:
             exit 1
           fi
           echo "out/index.html found: $(wc -c < out/index.html) bytes"
-          echo "All files in out/:"
-          ls -la out/
 
       - name: Add Android platform
         run: npx cap add android || true
+
+      - name: Grant storage permissions in AndroidManifest
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          if [ -f "$MANIFEST" ]; then
+            echo "Original manifest:"
+            cat "$MANIFEST"
+            sed -i 's|</application>|    <!-- Storage permissions for export to Download folder -->\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n</application>|' "$MANIFEST"
+            grep -q "WRITE_EXTERNAL_STORAGE" "$MANIFEST" || sed -i 's|<application|<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n    <application|' "$MANIFEST"
+            echo "Modified manifest:"
+            cat "$MANIFEST"
+          else
+            echo "ERROR: AndroidManifest.xml not found"
+            exit 1
+          fi
 
       - name: Sync web assets & config
         run: npx cap sync android
