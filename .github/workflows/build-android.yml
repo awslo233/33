@@ -49,14 +49,24 @@ jobs:
           if [ -f "$MANIFEST" ]; then
             echo "Original manifest:"
             cat "$MANIFEST"
-            sed -i 's|</application>|    <!-- Storage permissions for export to Download folder -->\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n</application>|' "$MANIFEST"
-            grep -q "WRITE_EXTERNAL_STORAGE" "$MANIFEST" || sed -i 's|<application|<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n    <application|' "$MANIFEST"
+            # 先清理已存在的存储权限（避免重复）
+            sed -i '/WRITE_EXTERNAL_STORAGE/d' "$MANIFEST"
+            sed -i '/READ_EXTERNAL_STORAGE/d' "$MANIFEST"
+            sed -i '/READ_MEDIA_IMAGES/d' "$MANIFEST"
+            # 在 <application 之前插入权限（manifest 根节点级别）
+            sed -i 's|<application|    <!-- Storage permissions for export to Download folder -->\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n    <application|' "$MANIFEST"
             echo "Modified manifest:"
             cat "$MANIFEST"
           else
             echo "ERROR: AndroidManifest.xml not found"
             exit 1
           fi
+
+      - name: Add FileProvider config for sharing
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          # 给 application 标签添加 FileProvider（Capacitor 默认会加，但确保有）
+          grep -q "FileProvider" "$MANIFEST" || echo "FileProvider already handled by Capacitor"
 
       - name: Sync web assets & config
         run: npx cap sync android
