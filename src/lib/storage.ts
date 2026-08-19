@@ -1,8 +1,7 @@
-import type { JournalEntry, ChatMessage, MoodType } from './types';
+import type { JournalEntry, MoodType } from './types';
 import { MOOD_CONFIGS } from './moods';
 
 const JOURNAL_KEY = 'adhd-journal-entries';
-const CHAT_KEY = 'adhd-journal-chat';
 const DRAFT_KEY = 'adhd-journal-draft';
 
 export function getEntries(): JournalEntry[] {
@@ -44,30 +43,6 @@ export function getEntriesByDate(dateStr: string): JournalEntry[] {
   return getEntries().filter((e) => e.createdAt.startsWith(dateStr));
 }
 
-export function getAllEntriesForAnalysis(): JournalEntry[] {
-  return getEntries();
-}
-
-export function getChatMessages(): ChatMessage[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = localStorage.getItem(CHAT_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-export function saveChatMessage(msg: ChatMessage): void {
-  const messages = getChatMessages();
-  messages.push(msg);
-  localStorage.setItem(CHAT_KEY, JSON.stringify(messages));
-}
-
-export function clearChatHistory(): void {
-  localStorage.removeItem(CHAT_KEY);
-}
-
 export function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
@@ -86,7 +61,6 @@ export interface ExportData {
   version: number;
   exportedAt: string;
   entries: JournalEntry[];
-  chatMessages: ChatMessage[];
 }
 
 export function exportAllData(): ExportData {
@@ -94,7 +68,6 @@ export function exportAllData(): ExportData {
     version: 1,
     exportedAt: new Date().toISOString(),
     entries: getEntries(),
-    chatMessages: getChatMessages(),
   };
 }
 
@@ -117,14 +90,6 @@ export function importAllData(data: ExportData): { success: boolean; message: st
 
     localStorage.setItem(JOURNAL_KEY, JSON.stringify(mergedEntries));
 
-    if (Array.isArray(data.chatMessages)) {
-      const existingMsgs = getChatMessages();
-      const existingMsgIds = new Set(existingMsgs.map((m) => m.id));
-      const newMsgs = data.chatMessages.filter((m) => !existingMsgIds.has(m.id));
-      const mergedMsgs = [...existingMsgs, ...newMsgs];
-      localStorage.setItem(CHAT_KEY, JSON.stringify(mergedMsgs));
-    }
-
     return {
       success: true,
       message: `成功导入 ${newEntries.length} 篇新日记`,
@@ -136,7 +101,6 @@ export function importAllData(data: ExportData): { success: boolean; message: st
 
 export function clearAllData(): void {
   localStorage.removeItem(JOURNAL_KEY);
-  localStorage.removeItem(CHAT_KEY);
   localStorage.removeItem(DRAFT_KEY);
 }
 
